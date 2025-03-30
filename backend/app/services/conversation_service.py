@@ -3,6 +3,7 @@ from typing import List, Dict, Optional
 import os
 import uuid
 import aiofiles
+import re
 
 from app.models.models import User, Conversation, Message
 from app.schemas import schemas
@@ -81,6 +82,12 @@ class ConversationService:
    - Express enthusiasm for the subject matter
    - Use playful language and occasional appropriate humor
 
+8. HANDLING IMAGES:
+   - When a student shares an image of a textbook, homework, or educational material, analyze it
+   - Give hints and guidance rather than direct answers
+   - Relate the image content to previous learning when possible
+   - Encourage the student to think through the problem step by step
+
 Always respond in a warm, encouraging tone. If unsure of the student's exact grade level, tailor the explanation to a slightly simpler level and adjust based on their responses."""
 
         # Add subject-specific instructions based on the conversation subject
@@ -146,7 +153,44 @@ Be flexible in your teaching approach while maintaining kid-friendly language an
         
         formatted_messages = [system_message]
         for message in messages:
-            formatted_messages.append({"role": message.role, "content": message.content})
+            if message.image_url:
+                # For messages with images, include both the text and image URL
+                try:
+                    # Get the file path from the image URL
+                    file_path = None
+                    if "/static/" in message.image_url:
+                        file_path = "app/static/" + message.image_url.split("/static/", 1)[1]
+                    
+                    # Convert image to base64 if it's a local file
+                    base64_image = None
+                    if file_path and os.path.exists(file_path):
+                        print(f"Converting image to base64: {file_path}")
+                        result = OpenAIService.image_to_base64(file_path)
+                        if result:
+                            img_data, content_type = result
+                            base64_image = f"data:{content_type};base64,{img_data}"
+                    
+                    if base64_image:
+                        # Use base64 data URL
+                        formatted_messages.append({
+                            "role": message.role,
+                            "content": [
+                                {"type": "text", "text": message.content},
+                                {"type": "image_url", "image_url": {"url": base64_image}}
+                            ]
+                        })
+                        print(f"Added message with base64 image")
+                    else:
+                        # Fall back to text-only if we can't convert the image
+                        formatted_messages.append({"role": message.role, "content": message.content})
+                        print(f"Could not convert image to base64, using text-only message")
+                except Exception as e:
+                    print(f"Error formatting message with image: {e}, falling back to text-only")
+                    # Fall back to text-only if there's an issue with the image
+                    formatted_messages.append({"role": message.role, "content": message.content})
+            else:
+                # For text-only messages
+                formatted_messages.append({"role": message.role, "content": message.content})
         
         return formatted_messages
     
@@ -167,60 +211,186 @@ Be flexible in your teaching approach while maintaining kid-friendly language an
         db: Session, 
         chat_request: schemas.ChatRequest
     ) -> schemas.ChatResponse:
-        # Create a new conversation if needed
-        conversation_id = chat_request.conversation_id
-        if not conversation_id:
-            # Create a new conversation
-            conversation = await ConversationService.create_conversation(
+        try:
+            print(f"Processing chat request: {chat_request}")
+            
+            # Create a new conversation if needed
+            conversation_id = chat_request.conversation_id
+            if not conversation_id:
+                # Create a new conversation
+                conversation = await ConversationService.create_conversation(
+                    db,
+                    schemas.ConversationCreate(
+                        user_id=chat_request.user_id,
+                        topic="General Chat"
+                    )
+                )
+                conversation_id = conversation.id
+                print(f"Created new conversation with ID: {conversation_id}")
+            
+            # Save user message to database
+            user_message = await ConversationService.add_message(
                 db,
-                schemas.ConversationCreate(
-                    user_id=chat_request.user_id,
-                    topic="General Chat"
+                schemas.MessageCreate(
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=chat_request.message,
+                    image_url=chat_request.image_url
                 )
             )
-            conversation_id = conversation.id
-        
-        # Save user message to database
-        user_message = await ConversationService.add_message(
-            db,
-            schemas.MessageCreate(
-                conversation_id=conversation_id,
-                role="user",
-                content=chat_request.message
+            print(f"Saved user message with ID: {user_message.id}")
+            
+            # Get conversation history - limit to 15 most recent messages to avoid overwhelming the API
+            all_messages = await ConversationService.get_messages(db, conversation_id)
+            # Always include the system message and the last 10 messages
+            messages = all_messages[-10:] if len(all_messages) > 10 else all_messages
+            print(f"Retrieved {len(messages)} recent messages from conversation (total: {len(all_messages)})")
+            
+            # Check if this is a request to move to the next problem
+            is_next_problem_request = False
+            message_lower = chat_request.message.lower()
+            if any(phrase in message_lower for phrase in ["next problem", "next question", "another problem", "problem 2", "question 2"]):
+                is_next_problem_request = True
+                print("Detected request for next problem")
+            
+            # Format messages for OpenAI
+            openai_messages = await ConversationService.format_messages_for_openai(messages)
+            
+            # Try first with full history including images
+            ai_response = ""
+            try:
+                if is_next_problem_request and chat_request.image_url is None:
+                    # For next problem requests without a new image, use the most recent image
+                    image_messages = [msg for msg in all_messages if msg.image_url]
+                    if image_messages:
+                        # Get the most recent image message
+                        recent_image_message = image_messages[-1]
+                        print(f"Using previous image for next problem: {recent_image_message.image_url}")
+                        
+                        # Analyze the image focusing on the next problem
+                        prompt = f"The student has asked for the next problem in this image. Please find the next unsolved problem and provide guidance for that specific problem."
+                        
+                        image_analysis = await OpenAIService.analyze_image(
+                            image_url=recent_image_message.image_url,
+                            prompt=prompt
+                        )
+                        
+                        # Use the image analysis as the response
+                        ai_response = image_analysis
+                    else:
+                        # No previous images, just respond to the text
+                        ai_response = await OpenAIService.generate_response(openai_messages)
+                        ai_response = "I don't see any previous problems to continue with. Can you upload an image with the problems you'd like help with?"
+                elif chat_request.image_url:
+                    print(f"Image URL detected in request: {chat_request.image_url}")
+                    # If this message includes an image, analyze it using GPT-4 Vision
+                    try:
+                        # Check if the user is asking about a specific problem number
+                        problem_number = None
+                        
+                        # Look for phrases like "problem 1", "question 2", etc.
+                        problem_patterns = [
+                            r"problem\s+(\d+)",
+                            r"question\s+(\d+)",
+                            r"exercise\s+(\d+)",
+                            r"#\s*(\d+)",
+                            r"number\s+(\d+)",
+                            r"(\d+)[:\.]"  # Matches "1:", "2.", etc.
+                        ]
+                        
+                        for pattern in problem_patterns:
+                            match = re.search(pattern, message_lower)
+                            if match:
+                                problem_number = int(match.group(1))
+                                print(f"Detected request for problem #{problem_number}")
+                                break
+                        
+                        # Construct the prompt based on whether a specific problem was requested
+                        if problem_number:
+                            prompt = f"This student sent an image with homework problems and is asking about problem #{problem_number}. Please focus ONLY on problem #{problem_number}, identify it in the image, and provide helpful, educational guidance for that specific problem."
+                        else:
+                            # Check if the message indicates they want help with all problems
+                            if any(phrase in message_lower for phrase in ["all problems", "all questions", "everything"]):
+                                prompt = f"This student sent an image with homework problems and wants help with all of them. Please identify each problem one by one, and focus ONLY on the FIRST problem for now. Mention that you'll help with one problem at a time, and they can ask about the next problem after understanding this one."
+                            else:
+                                # Default case - focus on first problem only
+                                prompt = f"This student sent an image with the message: '{chat_request.message}'. If this contains multiple problems or questions, please identify the first problem only and provide helpful, educational guidance for just that first problem. Let them know you can help with the other problems one at a time."
+                        
+                        image_analysis = await OpenAIService.analyze_image(
+                            image_url=chat_request.image_url,
+                            prompt=prompt
+                        )
+                        
+                        # Add image analysis to the response
+                        ai_response = image_analysis
+                        print(f"Image analysis successful, response length: {len(ai_response)}")
+                    except Exception as e:
+                        print(f"Error analyzing image: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        
+                        # Fall back to regular chat if image analysis fails
+                        ai_response = await OpenAIService.generate_response(openai_messages)
+                        ai_response = "I had trouble analyzing your image, but I'll try to help with your question: " + ai_response
+                else:
+                    # Generate AI response for text-only messages
+                    ai_response = await OpenAIService.generate_response(openai_messages)
+            except Exception as e:
+                print(f"Error with full history: {e}")
+                
+                # If failed with full history, try with text-only recent messages
+                try:
+                    print("Falling back to text-only conversation")
+                    # Filter out messages with images
+                    text_only_messages = [
+                        {"role": msg["role"], "content": msg["content"]} 
+                        for msg in openai_messages 
+                        if not (isinstance(msg.get("content"), list) and 
+                              any(isinstance(c, dict) and c.get("type") == "image_url" for c in msg.get("content", [])))
+                    ]
+                    
+                    # Generate response with text-only messages
+                    ai_response = await OpenAIService.generate_response(text_only_messages)
+                    ai_response = "I had some trouble with our previous image-based conversation, but I can still help with your question: " + ai_response
+                except Exception as e2:
+                    print(f"Error with text-only fallback: {e2}")
+                    ai_response = "I'm having trouble generating a response right now. Could you please try again with your question?"
+            
+            # Save assistant message to database
+            assistant_message = await ConversationService.add_message(
+                db,
+                schemas.MessageCreate(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=ai_response
+                )
             )
-        )
-        
-        # Get conversation history
-        messages = await ConversationService.get_messages(db, conversation_id)
-        
-        # Format messages for OpenAI
-        openai_messages = await ConversationService.format_messages_for_openai(messages)
-        
-        # Generate AI response
-        ai_response = await OpenAIService.generate_response(openai_messages)
-        
-        # Save assistant message to database
-        assistant_message = await ConversationService.add_message(
-            db,
-            schemas.MessageCreate(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=ai_response
+            print(f"Saved assistant message with ID: {assistant_message.id}")
+            
+            # Generate speech from AI response
+            try:
+                tts_response = await OpenAIService.text_to_speech(ai_response)
+                audio_url = tts_response.get("audio_url")
+                print(f"Generated speech with URL: {audio_url}")
+            except Exception as e:
+                print(f"Error generating speech: {e}")
+                audio_url = None
+            
+            # Return response
+            return schemas.ChatResponse(
+                text=ai_response,
+                audio_url=audio_url,
+                message={
+                    "id": assistant_message.id,
+                    "role": assistant_message.role,
+                    "content": assistant_message.content,
+                    "conversation_id": assistant_message.conversation_id,
+                    "timestamp": assistant_message.timestamp.isoformat(),
+                    "image_url": user_message.image_url
+                }
             )
-        )
-        
-        # Generate speech from AI response
-        tts_response = await OpenAIService.text_to_speech(ai_response)
-        
-        # Return response
-        return schemas.ChatResponse(
-            text=ai_response,
-            audio_url=tts_response.get("audio_url"),
-            message={
-                "id": assistant_message.id,
-                "role": assistant_message.role,
-                "content": assistant_message.content,
-                "conversation_id": assistant_message.conversation_id,
-                "timestamp": assistant_message.timestamp.isoformat()
-            }
-        ) 
+        except Exception as e:
+            print(f"Error in process_chat: {e}")
+            import traceback
+            traceback.print_exc()
+            raise e 

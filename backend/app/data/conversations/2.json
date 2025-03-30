@@ -1,0 +1,30 @@
+{
+  "topic": "problems",
+  "user_id": 2,
+  "subject": "Math",
+  "created_at": "2025-03-29T23:09:35.644277",
+  "timestamp": "2025-03-30T00:17:41.916793",
+  "messages": [
+    {
+      "id": "11fcb207-00cb-4731-a211-9e8ba78a9ab0",
+      "conversation_id": 2,
+      "content": "How I can add 33 + 18. I am having hard time to do this additon. any tips?",
+      "role": "user",
+      "timestamp": "2025-03-30T00:01:54.156378"
+    },
+    {
+      "id": "e30fca5b-7995-4ab4-a8eb-d1e1705fa9bc",
+      "conversation_id": 2,
+      "content": "that's nice and let's go to the next problem",
+      "role": "user",
+      "timestamp": "2025-03-30T00:12:31.219684"
+    },
+    {
+      "id": "25f65487-f667-49ca-8d26-2fa55537523d",
+      "conversation_id": 2,
+      "content": "okay let's go to the next problem",
+      "role": "user",
+      "timestamp": "2025-03-30T00:17:41.916754"
+    }
+  ]
+}

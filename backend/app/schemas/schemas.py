@@ -22,6 +22,7 @@ class User(UserBase):
 class MessageBase(BaseModel):
     role: str
     content: str
+    image_url: Optional[str] = None
 
 class MessageCreate(MessageBase):
     conversation_id: int
@@ -56,6 +57,7 @@ class ChatRequest(BaseModel):
     message: str
     user_id: int
     conversation_id: Optional[int] = None
+    image_url: Optional[str] = None
     
 class ChatResponse(BaseModel):
     text: str

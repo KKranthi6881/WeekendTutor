@@ -34,6 +34,7 @@ class Message(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id"))
     role = Column(String)  # "user" or "assistant"
     content = Column(Text)
+    image_url = Column(String, nullable=True)  # Store URL/path to uploaded image
     timestamp = Column(DateTime, default=func.now())
     
     conversation = relationship("Conversation", back_populates="messages") 

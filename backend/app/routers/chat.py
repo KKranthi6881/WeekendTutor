@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Body, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Body, Query, Path, Form
 from sqlalchemy.orm import Session
 import os
 import uuid
@@ -346,4 +346,128 @@ Always respond with enthusiasm to keep the student engaged."""
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process learning response: {str(e)}"
-        ) 
+        )
+
+@router.post("/with-image", response_model=schemas.ChatResponse)
+async def chat_with_image(
+    file: UploadFile = File(...),
+    message: str = Form(...),
+    user_id: int = Form(...),
+    conversation_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Process a chat message that includes an uploaded image
+    """
+    file_path = ""
+    try:
+        print(f"Received image upload request - file: {file.filename}, message: {message}, user_id: {user_id}, conversation_id: {conversation_id}")
+        
+        # Create uploads directory if it doesn't exist
+        os.makedirs("app/static/uploads/images", exist_ok=True)
+        
+        # Generate a unique filename with original extension
+        file_extension = os.path.splitext(file.filename)[1].lower() if file.filename else ".jpg"
+        filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = f"app/static/uploads/images/{filename}"
+        
+        # Save the uploaded file
+        file_content = await file.read()
+        if not file_content:
+            raise ValueError("Empty file content received")
+            
+        with open(file_path, "wb") as buffer:
+            buffer.write(file_content)
+            
+        print(f"Saved image to {file_path}")
+            
+        # Create the full URL path to the image
+        base_url = "http://localhost:8000"  # This should be configurable or derived from request
+        image_url = f"{base_url}/static/uploads/images/{filename}"
+        
+        print(f"Image URL: {image_url}")
+        
+        # Validate user_id
+        try:
+            user_id_int = int(user_id)
+        except (ValueError, TypeError):
+            user_id_int = 1  # Default to user 1 if parsing fails
+            print(f"Invalid user_id format: {user_id}, using default: 1")
+        
+        # Create a temporary copy of the message without image_url
+        # This is to make it backward compatible if the database migration failed
+        try:
+            # First try with image_url
+            chat_request = schemas.ChatRequest(
+                message=message,
+                user_id=user_id_int,
+                conversation_id=int(conversation_id) if conversation_id else None,
+                image_url=image_url
+            )
+            
+            print(f"Processing chat request with image: {chat_request}")
+            
+            # Use the existing chat processing flow with the image URL
+            return await ConversationService.process_chat(db=db, chat_request=chat_request)
+        except Exception as db_error:
+            if "no column named image_url" in str(db_error):
+                print("Warning: Database schema missing image_url column. Falling back to text-only message.")
+                # Fall back to a message without image_url
+                chat_request = schemas.ChatRequest(
+                    message=f"{message} (Image uploaded but not stored in database)",
+                    user_id=user_id_int,
+                    conversation_id=int(conversation_id) if conversation_id else None
+                )
+                
+                # Process and analyze the image directly with OpenAI Vision
+                try:
+                    image_analysis = await OpenAIService.analyze_image(
+                        image_url=image_url,
+                        prompt=f"This student sent an image with the message: '{message}'. Please analyze the image and provide helpful, educational guidance."
+                    )
+                    
+                    # Process the regular chat without storing the image
+                    chat_response = await ConversationService.process_chat(db=db, chat_request=chat_request)
+                    
+                    # Override the text with the image analysis result
+                    chat_response.text = image_analysis
+                    
+                    # If there's a message, update its content as well
+                    if chat_response.message and 'content' in chat_response.message:
+                        chat_response.message['content'] = image_analysis
+                    
+                    return chat_response
+                except Exception as vision_error:
+                    print(f"Error analyzing image with Vision API: {vision_error}")
+                    raise
+            else:
+                raise db_error
+        
+    except Exception as e:
+        print(f"Error in chat_with_image: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Handle errors
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)  # Clean up file on error
+            print(f"Cleaned up file: {file_path}")
+            
+        if "invalid_api_key" in str(e) or "Incorrect API key" in str(e):
+            error_message = "Error: OpenAI API key is invalid or not set. Please configure a valid API key."
+            print(f"OpenAI API key error: {str(e)}")
+            
+            # Return a fallback response
+            return {
+                "text": error_message,
+                "audio_url": None,
+                "message": {
+                    "id": "fallback",
+                    "role": "assistant",
+                    "content": error_message,
+                    "conversation_id": conversation_id or 0
+                }
+            }
+        else:
+            # For other errors, raise an HTTP exception
+            raise HTTPException(status_code=500, detail=f"Error processing chat with image: {str(e)}") 

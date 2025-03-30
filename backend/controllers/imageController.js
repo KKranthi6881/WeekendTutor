@@ -118,7 +118,7 @@ exports.analyzeImage = async (req, res) => {
     
     // Call OpenAI's GPT-4 Vision model
     const response = await openai.createChatCompletion({
-      model: "gpt-4-vision-preview",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",

@@ -92,7 +92,7 @@ async def analyze_image(request: Request, data: dict):
         
         # Call OpenAI's GPT-4 Vision model
         completion = openai.ChatCompletion.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": [

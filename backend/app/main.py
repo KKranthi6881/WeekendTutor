@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 import openai
 from pathlib import Path
+import uvicorn
 
 # Get API key from environment variable or use a placeholder that tells the user to replace it
 # You must replace this with your actual OpenAI API key to use chat and TTS features
@@ -60,7 +61,7 @@ try:
     import sys
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     
-    from backend.app.routers import image, learning, conversations, users, chat, messages
+    from app.routers import image, learning, conversations, users, chat, messages
     
     # Include routers with API prefix
     app.include_router(image.router, prefix=api_prefix)
@@ -176,5 +177,4 @@ async def text_to_speech(request: Request):
         )
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=True) 
