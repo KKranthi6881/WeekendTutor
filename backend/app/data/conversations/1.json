@@ -1,0 +1,23 @@
+{
+  "topic": "science",
+  "user_id": 2,
+  "subject": "Science",
+  "created_at": "2025-03-29T22:40:40.736337",
+  "timestamp": "2025-03-29T22:43:53.631944",
+  "messages": [
+    {
+      "id": "b8e2a62c-011a-4b59-800d-1ed6213c46c4",
+      "conversation_id": 1,
+      "content": "How the plants grow?",
+      "role": "user",
+      "timestamp": "2025-03-29T22:40:47.731387"
+    },
+    {
+      "id": "92be4e84-a7e2-44e4-ba36-ed01d473369c",
+      "conversation_id": 1,
+      "content": "How the plants grow?",
+      "role": "user",
+      "timestamp": "2025-03-29T22:43:53.631921"
+    }
+  ]
+}
